@@ -3,7 +3,7 @@
 ## Checklist
 
 - [ ] Instalar dependencia `@google/generative-ai`
-- [ ] Implementar `src/server/services/gemini.js` (resuelve keyId → key desde Mongo)
+- [ ] Implementar `src/server/services/gemini.js` (usa `process.env.GEMINI_API_KEY`)
 - [ ] Definir system prompt y user payload
 - [ ] Implementar `src/server/services/diff-decode.js` (`mapRefsToHighlights`)
 - [ ] Implementar `src/server/jobs/compare-job.js`
@@ -22,16 +22,15 @@ npm install @google/generative-ai
 
 ## `src/server/services/gemini.js`
 
-Wrapper sobre el cliente de Gemini. Recibe un `keyId` en lugar de la key directamente.
+Wrapper sobre el cliente de Gemini. Usa `process.env.GEMINI_API_KEY` directamente (secreto del servidor).
 
-**Función principal**: `compareDocuments(keyId, doc1TextPayload, doc2TextPayload)`
+**Función principal**: `compareDocuments(doc1TextPayload, doc2TextPayload)`
 
-Los dos últimos parámetros son los `ocrTextPayload` ya construidos por `ocr-paragraph-index.js`
+Los parámetros son los `ocrTextPayload` ya construidos por `ocr-paragraph-index.js`
 (strings con separadores de página y `[PX_Y_Z]` refs).
 
 ```js
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const ApiKey = require('../models/api-key');
 
 // ---------------------------------------------------------------------------
 // System prompt
@@ -124,13 +123,12 @@ const RESPONSE_SCHEMA = {
 // Main function
 // ---------------------------------------------------------------------------
 
-async function compareDocuments(keyId, doc1TextPayload, doc2TextPayload) {
-  // 1. Resolver key desde Mongo
-  const apiKeyDoc = await ApiKey.findById(keyId);
-  if (!apiKeyDoc) throw new Error(`API key not found: ${keyId}`);
+async function compareDocuments(doc1TextPayload, doc2TextPayload) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not set in environment variables');
+  }
 
-  // 2. Inicializar cliente Gemini
-  const genAI = new GoogleGenerativeAI(apiKeyDoc.key);
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({
     model: 'gemini-1.5-pro',
     systemInstruction: SYSTEM_PROMPT,
@@ -372,7 +370,7 @@ CREATED → COMPARE_RUNNING → DONE
 ```js
 const gemini      = require('../services/gemini');
 const { mapRefsToHighlights } = require('../services/diff-decode');
-const Comparison  = require('../models/comparison');
+const { Comparison } = require('../services/mongo');
 
 async function runCompareJob(comparisonId) {
   const comp = await Comparison.findById(comparisonId)
@@ -390,7 +388,6 @@ async function runCompareJob(comparisonId) {
 
     // Llamar a Gemini con los text payloads
     const { genaiChanges, summary, tokensUsed } = await gemini.compareDocuments(
-      comp.keyId,
       comp.docAId.ocrTextPayload,
       comp.docBId.ocrTextPayload,
     );
@@ -425,9 +422,9 @@ module.exports = { runCompareJob };
 
 ### `POST /api/comparisons`
 
-Crea una nueva comparación (no la ejecuta aún).
+Crea una nueva comparación y dispara el compare job (fire-and-forget).
 
-**Headers**: `X-API-Key-Id: <keyId>`
+**Headers**: `X-Api-Key: <token>` (auth propia de la solución)
 
 **Request body**:
 ```json
@@ -436,8 +433,7 @@ Crea una nueva comparación (no la ejecuta aún).
 
 **Validaciones**:
 - Ambos `docAId` y `docBId` deben existir en Mongo
-- `X-API-Key-Id` debe existir en Mongo
-- Ambos documentos deben tener `ocrStatus === 'DONE'` (si no, devolver error descriptivo)
+- Ambos documentos deben tener `ocrStatus === 'DONE'` (si no, devolver 409)
 
 **Response** `201`:
 ```json
@@ -543,24 +539,21 @@ Devuelve los datos necesarios para que el frontend configure el render.
 # 1. Asegurarse de tener dos docs con ocrStatus=DONE
 DOCA_ID="64abc..."
 DOCB_ID="64def..."
-KEY_ID="64key..."
+KEY="mi-api-key-token"
 
-# 2. Crear comparación
+# 2. Crear comparación (dispara job automáticamente)
 COMP=$(curl -s -X POST http://localhost:3000/api/comparisons \
   -H "Content-Type: application/json" \
-  -H "X-API-Key-Id: $KEY_ID" \
+  -H "X-Api-Key: $KEY" \
   -d "{\"docAId\": \"$DOCA_ID\", \"docBId\": \"$DOCB_ID\"}")
 COMP_ID=$(echo $COMP | jq -r '._id')
 echo "Comparison ID: $COMP_ID"
 
-# 3. Disparar comparación
-curl -s -X POST http://localhost:3000/api/comparisons/$COMP_ID/run
+# 3. Polling hasta DONE
+watch -n 3 "curl -s -H 'X-Api-Key: $KEY' http://localhost:3000/api/comparisons/$COMP_ID | jq '{status, diffCount: (.differences | length)}'"
 
-# 4. Polling hasta DONE
-watch -n 3 "curl -s http://localhost:3000/api/comparisons/$COMP_ID | jq '{status, diffCount: (.differences | length)}'"
-
-# 5. Ver diferencias
-curl -s http://localhost:3000/api/comparisons/$COMP_ID | jq '.differences'
+# 4. Ver diferencias
+curl -s -H "X-Api-Key: $KEY" http://localhost:3000/api/comparisons/$COMP_ID | jq '.differences'
 ```
 
 **Señales de éxito**:

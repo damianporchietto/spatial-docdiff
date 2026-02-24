@@ -15,8 +15,8 @@ const documentSchema = new mongoose.Schema({
   uploadedAt:   { type: Date, default: Date.now },
   ocrStatus:    { type: String, enum: ['PENDING', 'RUNNING', 'DONE', 'ERROR'], default: 'PENDING' },
   ocrError:     String,
-  ocrCanonical: mongoose.Schema.Types.Mixed,
-  ocrEncoding:  String,
+  ocrParagraphs:  [mongoose.Schema.Types.Mixed],
+  ocrTextPayload: String,
   pageCount:    Number,
 });
 

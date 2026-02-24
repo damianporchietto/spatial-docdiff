@@ -100,8 +100,9 @@ router.get('/:id/ocr', requireScope('read'), async (req, res) => {
 
     return res.json({
       pageCount: doc.pageCount,
-      encoding:  doc.ocrEncoding,
-      canonical: doc.ocrCanonical,
+      paragraphCount: doc.ocrParagraphs.length,
+      textPayload: doc.ocrTextPayload,
+      paragraphs: doc.ocrParagraphs,
     });
   } catch (err) {
     console.error('[documents] ocr error:', err);

@@ -37,4 +37,15 @@ function streamFile(gridfsId, res) {
   bucket.openDownloadStream(gridfsId).pipe(res);
 }
 
-module.exports = { upload, storeFile, streamFile };
+async function getFileBuffer(gridfsId) {
+  const bucket = getBucket();
+  const chunks = [];
+  return new Promise((resolve, reject) => {
+    bucket.openDownloadStream(gridfsId)
+      .on('data', chunk => chunks.push(chunk))
+      .on('end', () => resolve(Buffer.concat(chunks)))
+      .on('error', reject);
+  });
+}
+
+module.exports = { upload, storeFile, streamFile, getFileBuffer };
